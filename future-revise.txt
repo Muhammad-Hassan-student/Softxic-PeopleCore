@@ -1,0 +1,191 @@
+# Create Next.js project
+npx create-next-app@latest hr-saas --typescript --tailwind --app --no-eslint
+cd hr-saas
+
+# Install required packages
+npm install @supabase/supabase-js @supabase/ssr
+npm install lucide-react date-fns axios
+npm install react-hook-form zod @hookform/resolvers
+npm install jspdf jspdf-autotable react-signature-canvas
+npm install qrcode.react react-hot-toast
+npm install bcryptjs jsonwebtoken
+npm install @radix-ui/react-avatar @radix-ui/react-dropdown-menu
+npm install @radix-ui/react-dialog @radix-ui/react-tabs
+npm install recharts react-loader-spinner
+npm install nodemailer handlebars
+
+# Install dev dependencies
+npm install -D @types/bcryptjs @types/jsonwebtoken
+
+
+===================== DB SUPABASE =================================
+-- Enable UUID
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Companies Table (Multi-tenant)   
+CREATE TABLE companies (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    slug VARCHAR(255) NOT NULL UNIQUE,
+    logo_url TEXT,
+    theme_color VARCHAR(7) DEFAULT '#3b82f6',
+    currency VARCHAR(3) DEFAULT 'PKR',
+    language VARCHAR(2) DEFAULT 'en',
+    subscription_tier VARCHAR(20) DEFAULT 'free',
+    trial_ends_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- Users Table
+CREATE TABLE users (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    role VARCHAR(20) DEFAULT 'employee' CHECK (role IN ('god', 'owner', 'hr', 'employee')),
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    is_active BOOLEAN DEFAULT true,
+    last_login TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- Employees Table
+CREATE TABLE employees (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    employee_code VARCHAR(50) UNIQUE NOT NULL,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id),
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    phone VARCHAR(20),
+    department VARCHAR(100),
+    designation VARCHAR(100),
+    basic_salary DECIMAL(12,2) DEFAULT 0,
+    joining_date DATE NOT NULL,
+    resignation_date DATE,
+    termination_date DATE,
+    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'probation', 'resigned', 'terminated')),
+    profile_pic_url TEXT,
+    signature_url TEXT,
+    qr_code_data TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- Salaries Table
+CREATE TABLE salaries (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    employee_id UUID REFERENCES employees(id) ON DELETE CASCADE,
+    month DATE NOT NULL,
+    basic_salary DECIMAL(12,2) NOT NULL,
+    loan_deduction DECIMAL(12,2) DEFAULT 0,
+    other_deductions DECIMAL(12,2) DEFAULT 0,
+    net_salary DECIMAL(12,2) NOT NULL,
+    payment_status VARCHAR(20) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'failed')),
+    payslip_url TEXT,
+    generated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()),
+    paid_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Loans Table
+CREATE TABLE loans (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    employee_id UUID REFERENCES employees(id) ON DELETE CASCADE,
+    amount DECIMAL(12,2) NOT NULL,
+    remaining DECIMAL(12,2) NOT NULL,
+    monthly_deduction DECIMAL(12,2) NOT NULL,
+    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'paid', 'defaulted')),
+    start_date DATE NOT NULL,
+    end_date DATE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- Attendance Table
+CREATE TABLE attendance (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    employee_id UUID REFERENCES employees(id) ON DELETE CASCADE,
+    check_in TIMESTAMP WITH TIME ZONE NOT NULL,
+    check_out TIMESTAMP WITH TIME ZONE,
+    location JSONB,
+    method VARCHAR(20) DEFAULT 'qr' CHECK (method IN ('qr', 'manual')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- Leaves Table
+CREATE TABLE leaves (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    employee_id UUID REFERENCES employees(id) ON DELETE CASCADE,
+    type VARCHAR(20) CHECK (type IN ('paid', 'unpaid', 'sick', 'casual')),
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    days INTEGER NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    reason TEXT,
+    approved_by UUID REFERENCES users(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- AI Chat History
+CREATE TABLE ai_chats (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- Email Logs
+CREATE TABLE email_logs (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+    template_name VARCHAR(100),
+    recipient_email VARCHAR(255),
+    subject VARCHAR(255),
+    status VARCHAR(20) DEFAULT 'sent',
+    sent_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW())
+);
+
+-- Enable RLS
+ALTER TABLE companies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE salaries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE loans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE leaves ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_chats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_logs ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS Policies
+CREATE POLICY "Companies view all" ON companies FOR SELECT USING (true);
+CREATE POLICY "Companies insert admin only" ON companies FOR INSERT WITH CHECK (auth.uid() IN (SELECT id FROM users WHERE role = 'god'));
+CREATE POLICY "Companies update admin only" ON companies FOR UPDATE USING (auth.uid() IN (SELECT id FROM users WHERE role = 'god'));
+
+CREATE POLICY "Users own data" ON users FOR ALL USING (auth.uid() = id OR company_id IN (SELECT company_id FROM users WHERE id = auth.uid()));
+CREATE POLICY "Employees by company" ON employees FOR ALL USING (company_id IN (SELECT company_id FROM users WHERE id = auth.uid()));
+
+CREATE POLICY "Users access policy" ON users 
+FOR ALL USING (
+  auth.uid() = id 
+  OR 
+  company_id = (SELECT u.company_id FROM users u WHERE u.id = auth.uid())
+);
+
+-- 3. Employees: Best logic for Multi-tenancy
+CREATE POLICY "Employees by company isolation" ON employees 
+FOR ALL USING (
+  company_id = (SELECT u.company_id FROM users u WHERE u.id = auth.uid())
+);
+
+-- 4. Salaries & Loans: Same isolation logic
+CREATE POLICY "Salaries company isolation" ON salaries 
+FOR ALL USING (
+  employee_id IN (
+    SELECT e.id FROM employees e 
+    WHERE e.company_id = (SELECT u.company_id FROM users u WHERE u.id = auth.uid())
+  )
+);
